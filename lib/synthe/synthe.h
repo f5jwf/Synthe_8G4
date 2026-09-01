@@ -17,8 +17,8 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 ****************************************************************************** */
 
 //
-#define VERSION "\n\rSynthe LMX25x2 Rel 0.4 F5jwf nov. 2025"
-#define RELEASE_LEVEL 04
+#define VERSION "\n\rSynthe LMX25x2 Rel 0.6 F5jwf sep. 2026"
+#define RELEASE_LEVEL 0x0060
 #define FALSE 0
 #define TRUE  1
 
@@ -31,7 +31,8 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 //Hardware definition
 
 #define LED_LIVE PIN_A6 //PA6 pin 4
-#define SPARE_IO PIN_A5 //PA5 pin3
+#define SERIAL_MODE_SELECT PIN_PA5 //PA5 pin3: LOW=CLI, HIGH=MODBUS
+#define LOCK_DETECT PIN_PA2 //PA2 pin12: HIGH=locked
 #define DATAOUT MOSI//PA1 pin 11
 #define DATAIN  MISO //PA2 pin 12
 #define SPICLOCK  SCK //PA3 pin13
@@ -56,6 +57,8 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 //#define DEFAULT_PLL_NUM         (U32)0x8000 //0x54614 //0x8000             //U32 4 bytes
 #define DEFAULT_PLL_DEN         (U32)0x00010000     //U32 4 bytes
 #define DEFAULT_MODBUS_ADD      (U8)20  //Default Modbus Slave Add
+#define MIN_OL_FREQ_KHZ         (U32)6000000
+#define MAX_OL_FREQ_KHZ         (U32)9800000
 
 
 //EEPROM Reservation for preference data !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!name to be changed
@@ -66,6 +69,9 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 #define DEFAULT_PLL_DEN_ADD         14  //U32 4 bytes
 #define DEFAULT_POWER_ADD           18  //U8
 #define FLASH_MODBUS_ADD            19  //U8
+#define EEPROM_MAGIC_ADD            20  //U16
+#define EEPROM_CRC_ADD              22  //U16
+#define EEPROM_CONFIG_MAGIC         0x5347
 
 //PLL SET REGISTER
 #define SET_FREQ      0x01
@@ -79,17 +85,14 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 
 
 
-// Modbus definition
-//Address Modbus Registre READ
-#define MODBUS_ADD_REG_R_RELEASE 	    101  // Release level Synthe ADD     		
-		
-//Address Modbus Registre WRITE
-#define MODBUS_ADD_REG_W_FREQ_L 		    201  // Frequency    		
-#define MODBUS_ADD_REG_W_FREQ_H		      202  // Frequency    	  		
-
-		
-//Address Modbus Registre READ/WRITE
-#define MODBUS_ADD_REG_RW_UPDATE1 		301  //Register have been touched by Master
+// Modbus PDU addresses. 32-bit frequencies are in kHz, high word first.
+#define MODBUS_HREG_OL_FREQ_H 0
+#define MODBUS_HREG_OL_FREQ_L 1
+#define MODBUS_IREG_OL_FREQ_H 0
+#define MODBUS_IREG_OL_FREQ_L 1
+#define MODBUS_IREG_FW_VERSION 2
+#define MODBUS_IREG_LOCKED 3
+#define MODBUS_ISTS_LOCKED    0
 
 
 
@@ -124,7 +127,7 @@ extern U8 U8_modbus_slave_add;
 
 /* Global prototypes decalaration */
 extern void SYNTHE_display_page0(void);
-extern void SYNTHE_init(void);
+extern void SYNTHE_init(boolean modbus_mode);
 extern void SYNTHE_cold_start(void);
 extern void SYNTHE_hot_start(void);
 extern void SYNTHE_help(void);
@@ -138,8 +141,8 @@ extern void SYNTHE_reset_default(void);
 extern void SYNTHE_LMX25XX_init_prefered(void);
 extern void SYNTHE_set_power(U8 power);
 extern void SYNTHE_set_PLL(U8 parameter, U32 value);
-//extern void SYNTHE_modbus_init(void);
-//extern void SYNTHE_modbus_publish(void);
+extern void SYNTHE_modbus_publish(void);
+extern void SYNTHE_save_config(void);
 
 /*-----------------------
 LMX Registers definition
@@ -208,7 +211,7 @@ PROGMEM const U32 LMX25XX_Register_Prefered[LMX_REGISTER_TABLE_SIZE] = {
 */
 
 ///*
-//Default Registers Values for Synth LMX2592 Design_4
+//Default Registers Values for Synth LMX259.2 Design_4
 //Design1;FVCO=7200M, Fpd=20M, N=90, FNUM=0
 #define DEFAULT_FREQ            (U32)7200000          //7200000MHz
 #define DEFAULT_PLL_PD          (U32)20000            //Phase detector freq 20MHz

@@ -42,15 +42,20 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 
 
 int test =0;
+static bool modbus_mode = true;
+static unsigned long last_led_toggle_ms = 0;
 
 
 void setup() {
   // put your setup code here, to run once:
     pinMode(LED_LIVE, OUTPUT);
     digitalWrite(LED_LIVE, HIGH); // 
+    pinMode(SERIAL_MODE_SELECT, INPUT_PULLUP);
+    pinMode(LOCK_DETECT, INPUT);
+    modbus_mode = (digitalRead(SERIAL_MODE_SELECT) == HIGH);
     Serial.begin(38400);
-    SYNTHE_init();  //Init Synth
-    SERIAL_init();  //Init CLI Serial
+    SYNTHE_init(modbus_mode);  //Init Synth and selected communication mode
+    if (!modbus_mode) SERIAL_init();
   
   
 }
@@ -58,14 +63,16 @@ void setup() {
 void loop() {
     // put your main code here, to run repeatedly:
  
-    //digitalWrite(LED_LIVE, HIGH); 
-    //delay(10);                 
-    //digitalWrite(LED_LIVE, LOW);  
+    if (modbus_mode) SYNTHE_modbus_publish();
+    else SERIAL_cmd_pool();
     SYNTHE_SEQUENCER();
-    SERIAL_cmd_pool();
-    if(U32_Time % 20 == 0) digitalWrite(LED_LIVE, !digitalRead(LED_LIVE)); // Toggle LED_LIVE
-    U32_Time++;
-    delay(40);
+
+    const unsigned long now = millis();
+    if (now - last_led_toggle_ms >= 500UL) {
+      last_led_toggle_ms = now;
+      digitalWrite(LED_LIVE, !digitalRead(LED_LIVE));
+    }
+    U32_Time = now;
 
   
  }

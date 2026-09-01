@@ -70,7 +70,7 @@ SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_c
 
 //Note: Commands are case sensitive
 /*
-      Serial.println(F("freq xxx          Set freq in [Hz]  (ex. 3590000 for 3.59G)")); //    
+      Serial.println(F("freq xxx          Set OL freq in [kHz] (6000000..9800000)"));
       Serial.println(F("pll_n xxx         Set N counter (19bits)")); // 
       Serial.println(F("pll_num xxx       Set Numerator counter (32bits)")); //             
       Serial.println(F("pll_den xxx       Set Denominator (32bits)")); //  */
@@ -148,12 +148,16 @@ void cmd_set_freq(SerialCommands* sender)
 
     char* param_str = sender->Next();
     if (param_str != NULL)	{
-		    param.u32 = strtol(param_str,NULL,10);    //Convert decimal string into integer
+		    param.u32 = strtoul(param_str,NULL,10);    //Convert decimal string into integer
+            if (param.u32 < MIN_OL_FREQ_KHZ || param.u32 > MAX_OL_FREQ_KHZ) {
+                sender->GetSerial()->println("Error: frequency must be 6000000..9800000 kHz");
+                return;
+            }
             Serial.print(F("Freq set to: "));
             sprintf(string, "%lu", param.u32);
             Serial.println(string);
             SYNTHE_set_PLL(SET_FREQ, param.u32);
-            EEPROM.put(DEFAULT_FREQ_ADD, param.u32);      
+
 	    } else sender->GetSerial()->println("Error No Argument");
 
 
@@ -166,12 +170,17 @@ void cmd_set_pll_n(SerialCommands* sender)
 
     char* param_str = sender->Next();
     if (param_str != NULL)	{
-		    param.u32 = strtol(param_str,NULL,10);    //Convert decimal string into integer
+		    param.u32 = strtoul(param_str,NULL,10);    //Convert decimal string into integer
+            if (param.u32 == 0 || param.u32 > 0x0FFF) {
+                sender->GetSerial()->println("Error: PLL_N must be 1..4095");
+                return;
+            }
             Serial.print(F("PLL_N set to: "));
             sprintf(string, "%04X %04X", param.u16[1], param.u16[0]);
             Serial.println(string);
             SYNTHE_set_PLL(SET_PLL_N, param.u32);
             EEPROM.put(DEFAULT_PLL_N_ADD, param.u32);       
+            SYNTHE_save_config();
 	    } else sender->GetSerial()->println("Error No Argument");
 
 
@@ -184,12 +193,17 @@ void cmd_set_pll_num(SerialCommands* sender)
 
     char* param_str = sender->Next();
     if (param_str != NULL)	{
-		    param.u32 = strtol(param_str,NULL,10);    //Convert decimal string into integer
+		    param.u32 = strtoul(param_str,NULL,10);    //Convert decimal string into integer
+            if (pll_den == 0 || param.u32 >= pll_den) {
+                sender->GetSerial()->println("Error: PLL_NUM must be lower than PLL_DEN");
+                return;
+            }
             Serial.print(F("PLL_NUM set to: "));
             sprintf(string, "%04X %04X", param.u16[1], param.u16[0]);
             Serial.println(string);
             SYNTHE_set_PLL(SET_PLL_NUM, param.u32);
             EEPROM.put(DEFAULT_PLL_NUM_ADD, param.u32);      
+            SYNTHE_save_config();
 	    } else sender->GetSerial()->println("Error No Argument");
 
 
@@ -202,12 +216,17 @@ void cmd_set_pll_den(SerialCommands* sender)
 
     char* param_str = sender->Next();
     if (param_str != NULL)	{
-		    param.u32 = strtol(param_str,NULL,10);    //Convert decimal string into integer
+		    param.u32 = strtoul(param_str,NULL,10);    //Convert decimal string into integer
+            if (param.u32 == 0 || pll_num >= param.u32) {
+                sender->GetSerial()->println("Error: PLL_DEN must be greater than PLL_NUM");
+                return;
+            }
             Serial.print(F("PLL_DEN set to: "));
             sprintf(string, "%04X %04X", param.u16[1], param.u16[0]);
             Serial.println(string);
             SYNTHE_set_PLL(SET_PLL_DEN, param.u32);
             EEPROM.put(DEFAULT_PLL_DEN_ADD, param.u32);      
+            SYNTHE_save_config();
 	    } else sender->GetSerial()->println("Error No Argument");
 }
 
@@ -225,6 +244,7 @@ void cmd_set_power(SerialCommands* sender)
             Serial.println(string);
             SYNTHE_set_power(param.u32);
             EEPROM.put(DEFAULT_POWER_ADD, (U8)param.u8[0]);      
+            SYNTHE_save_config();
 	    } else sender->GetSerial()->println("Error No Argument");
 
 
@@ -299,7 +319,7 @@ void cmd_debug_tool(SerialCommands* sender)
     char* param_str = sender->Next();
     if (param_str != NULL)	{
 		debug = atoi(param_str);
-        sprintf(string, "Debug=%u\n\r", U8_Debugg);
+        sprintf(string, "Debug=%u\n\r", debug);
         Serial.println(string);
         SYNTHE_debug(debug);
 	    } else sender->GetSerial()->println("Error No Argument");

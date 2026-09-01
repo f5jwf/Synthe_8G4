@@ -33,7 +33,7 @@ DATE			VERSION	REVISOR 	DESCRIPTION
 /* Global functions prototypes */
 void SYNTHE_help(void);
 
-void SYNTHE_init(void);
+void SYNTHE_init(boolean modbus_mode);
 void SYNTHE_cold_start(void);
 void SYNTHE_hot_start(void);
 void SYNTHE_debug_trace(const char *message);
@@ -49,6 +49,7 @@ void SYNTHE_set_power(U8 power);
 void SYNTHE_set_PLL(U8 parameter, U32 value);
 void SYNTHE_modbus_init(void);
 void SYNTHE_modbus_publish(void);
+void SYNTHE_save_config(void);
 
 
 
@@ -57,6 +58,8 @@ void SYNTHE_modbus_publish(void);
 U32 set_field(U32 reg, U32 field_value, U8 field_pos, U8 field_size);
 void SYNTHE_read_eeprom(void);
 void SYNTHE_sendto_LMX(U32 data);
+U16 SYNTHE_config_crc(void);
+boolean SYNTHE_config_valid(void);
 
 
 
@@ -70,6 +73,7 @@ U32 pll_N=0;
 U32 pll_num=0;
 U32 pll_den=0;
 U8 U8_modbus_slave_add = DEFAULT_MODBUS_ADD;
+boolean B_modbus_mode = true;
 
 
 
@@ -90,13 +94,16 @@ Input(s)       :
 Output(s)      : 
 Return         : 
 --------------------------------------------------------------------------------*/
-void SYNTHE_init(void)
+void SYNTHE_init(boolean modbus_mode)
 {
       char string[8];
       U16 boot_counter=0;
 
-      Serial.println(F(VERSION));
-      Serial.println(F("......................................"));
+      B_modbus_mode = modbus_mode;
+      if (!B_modbus_mode) {
+            Serial.println(F(VERSION));
+            Serial.println(F("......................................"));
+      }
 
       //Init SPI 
       pinMode(DATAOUT, OUTPUT);
@@ -115,17 +122,19 @@ void SYNTHE_init(void)
 
       //Restore Preference (Cold or Hot start)
       EEPROM.get(BOOT_COUNT_ADD, boot_counter);
-      Serial.print(F("Boot Count: "));      //debug
-      sprintf(string,"%u",boot_counter);
-      Serial.println(string);
-      if(boot_counter == 65535 || boot_counter == 0) SYNTHE_cold_start(); 
+      if (!B_modbus_mode) {
+            Serial.print(F("Boot Count: "));
+            sprintf(string,"%u",boot_counter);
+            Serial.println(string);
+      }
+      if (!SYNTHE_config_valid()) SYNTHE_cold_start();
       else SYNTHE_hot_start();
 
       //Init  Synthetizer
       SYNTHE_LMX25XX_init_prefered();
 
       // Init Modbus
-      SYNTHE_modbus_init();                         // Init all MODBUS params
+      if (B_modbus_mode) SYNTHE_modbus_init();
 }
 
 /*--------------------------------------------------------------------------------
@@ -418,7 +427,7 @@ void SYNTHE_LMX25XX_init_prefered(void)
       SYNTHE_set_PLL(SET_PLL_NUM, pll_num);
       SYNTHE_set_PLL(SET_PLL_DEN, pll_den);
 
-      Serial.println(F("LMX Register restored to prefered"));
+      if (!B_modbus_mode) Serial.println(F("LMX Register restored to prefered"));
 
 }
 
@@ -436,7 +445,7 @@ void SYNTHE_reset_default(void)
       char string[10];
       U8 reg_nr;
 
-      Serial.println(F("LMX SPI Register Reset to default"));
+      if (!B_modbus_mode) Serial.println(F("LMX SPI Register Reset to default"));
       // Set Reg0 for RESET bit1=1 Reg0=0x221E
       reg.u32 = 0x221E;             //Set R0 default with ReadBack
       digitalWrite(SYNTHE_CS, LOW); //select LMX
@@ -487,6 +496,8 @@ void  SYNTHE_set_PLL(U8 parameter, U32 value)
       switch(parameter)
       {
             case SET_FREQ:     
+                  if (value < MIN_OL_FREQ_KHZ || value > MAX_OL_FREQ_KHZ || pll_den == 0) return;
+                  pll_freq = value;
                  #ifdef VERSION_LMX2572 //Set frequency fvco = fdp * (PLL_N + PLL_NUM/PLL_DEN)
                   pll_N = value / DEFAULT_PLL_PD;   //Integer value
                   num.ull = ((U64)value * (U64)pll_den)/DEFAULT_PLL_PD;
@@ -501,21 +512,23 @@ void  SYNTHE_set_PLL(U8 parameter, U32 value)
                   #endif
 
                   
-                  Serial.print(F("PLL_N="));
-                  sprintf(string,"%lu",pll_N);
-                  Serial.print(string);
-                  reg.u32 = pll_num;
-                  Serial.print(F(", PLL_num="));
-                  sprintf(string,"0x%04X ",reg.u16[1]);
-                  Serial.print(string);  
-                  sprintf(string," 0x%04X",reg.u16[0]);
-                  Serial.print(string);                    
-                  reg.u32 = pll_den;
-                  Serial.print(F(", PLL_den="));
-                  sprintf(string,"0x%04X ",reg.u16[1]);
-                  Serial.print(string);  
-                  sprintf(string," 0x%04X",reg.u16[0]);
-                  Serial.println(string);  
+                  if (!B_modbus_mode) {
+                        Serial.print(F("PLL_N="));
+                        sprintf(string,"%lu",pll_N);
+                        Serial.print(string);
+                        reg.u32 = pll_num;
+                        Serial.print(F(", PLL_num="));
+                        sprintf(string,"0x%04X ",reg.u16[1]);
+                        Serial.print(string);
+                        sprintf(string," 0x%04X",reg.u16[0]);
+                        Serial.print(string);
+                        reg.u32 = pll_den;
+                        Serial.print(F(", PLL_den="));
+                        sprintf(string,"0x%04X ",reg.u16[1]);
+                        Serial.print(string);
+                        sprintf(string," 0x%04X",reg.u16[0]);
+                        Serial.println(string);
+                  }
 
                   //Set Parameter to LMX
                   SYNTHE_set_PLL(SET_PLL_N, pll_N);
@@ -523,10 +536,14 @@ void  SYNTHE_set_PLL(U8 parameter, U32 value)
                   // Save to EEPROM
                   EEPROM.put(DEFAULT_PLL_N_ADD, pll_N);                            
                   EEPROM.put(DEFAULT_PLL_NUM_ADD, pll_num);                      
+                  EEPROM.put(DEFAULT_FREQ_ADD, pll_freq);
+                  SYNTHE_save_config();
                   break;
 
 
             case SET_PLL_N:        //Set N Register 
+                  if (value == 0 || value > 0x0FFF) return;
+                  pll_N = value;
                   #ifdef VERSION_LMX2572
                   reg_nr = 36;                                                                        //First 16bits
                   reg.u32 = value & 0xffff;                                                           //limit to 16bits LSB 
@@ -552,6 +569,8 @@ void  SYNTHE_set_PLL(U8 parameter, U32 value)
 
 
             case SET_PLL_NUM:     //Set Numerator
+                  if (pll_den == 0 || value >= pll_den) return;
+                  pll_num = value;
                   #ifdef VERSION_LMX2572
                   reg_nr = 43;                                                                        //First 16bits
                   reg.u32 = value & 0xffff;                                                           //limit to 16bits LSB 
@@ -579,6 +598,8 @@ void  SYNTHE_set_PLL(U8 parameter, U32 value)
 
 
             case SET_PLL_DEN:     //Set Denominator
+                  if (value == 0 || pll_num >= value) return;
+                  pll_den = value;
                   #ifdef VERSION_LMX2572                 
                   reg_nr = 39;                                                                        //First 16bits
                   reg.u32 = value & 0xffff;                                                           //limit to 16bits LSB 
@@ -774,7 +795,7 @@ void SYNTHE_help(void)
       //Serial.println(F("l                 Toggle on/off Power Loop Reading"));
       //Serial.println(F("power?            Single power query"));  
       //Serial.println(F("cal_power?        Single power query for AD608 calibration"));      
-      Serial.println(F("freq xxx          Set freq in [Hz]  (ex. 3590000 for 3.59G)")); //    
+      Serial.println(F("freq xxx          Set OL freq in [kHz] (6000000..9800000)"));
       Serial.println(F("pll_n xxx         Set N counter (19bits)")); // 
       Serial.println(F("pll_num xxx       Set Numerator counter (32bits)")); //             
       Serial.println(F("pll_den xxx       Set Denominator (32bits)")); //     
@@ -810,33 +831,42 @@ void SYNTHE_hot_start(void)
     // U16 data=0;
      
       //Boot Count
-      Serial.println(F("Prefered Data Restored from Flash"));
+      if (!B_modbus_mode) Serial.println(F("Prefered Data Restored from Flash"));
       EEPROM.get(BOOT_COUNT_ADD, data_l.ui[0]);
       EEPROM.put(BOOT_COUNT_ADD, data_l.ui[0] + 1);
       //Freq 
       EEPROM.get(DEFAULT_FREQ_ADD, data_l.ul[0]);
       pll_freq = data_l.ul[0];
-      Serial.print(F("freq="));
-      sprintf(string, "%lu", data_l.ul[0]);
-      Serial.print(string);   
+      if (!B_modbus_mode) {
+            Serial.print(F("freq="));
+            sprintf(string, "%lu", data_l.ul[0]);
+            Serial.print(string);
+      }
       //PLL_N
       EEPROM.get(DEFAULT_PLL_N_ADD, data_l.ul[0]);
       pll_N = data_l.ul[0];
-      Serial.print(F(", PLL_N="));
-      sprintf(string, "%lu", data_l.ul[0]);
-      Serial.print(string);   
+      if (!B_modbus_mode) {
+            Serial.print(F(", PLL_N="));
+            sprintf(string, "%lu", data_l.ul[0]);
+            Serial.print(string);
+      }
       //PLL_N
       EEPROM.get(DEFAULT_PLL_NUM_ADD, data_l.ul[0]);
       pll_num = data_l.ul[0];
-      Serial.print(F(", PLL_num="));
-      sprintf(string, "%lu", data_l.ul[0]);
-      Serial.print(string); 
+      if (!B_modbus_mode) {
+            Serial.print(F(", PLL_num="));
+            sprintf(string, "%lu", data_l.ul[0]);
+            Serial.print(string);
+      }
       //PLL_N
       EEPROM.get(DEFAULT_PLL_DEN_ADD, data_l.ul[0]);
       pll_den = data_l.ul[0];
-      Serial.print(F(", PLL_den="));
-      sprintf(string, "%lu", data_l.ul[0]);
-      Serial.println(string); 
+      if (!B_modbus_mode) {
+            Serial.print(F(", PLL_den="));
+            sprintf(string, "%lu", data_l.ul[0]);
+            Serial.println(string);
+      }
+      EEPROM.get(FLASH_MODBUS_ADD, U8_modbus_slave_add);
 
 
 }
@@ -860,14 +890,58 @@ void SYNTHE_cold_start(void)
       //char string[6];
       //U16 data=0;
 
-      Serial.println(F("Cold Start: Force Default value"));
+      if (!B_modbus_mode) Serial.println(F("Cold Start: Force Default value"));
       EEPROM.put(BOOT_COUNT_ADD, 0); 
       EEPROM.put(DEFAULT_FREQ_ADD, DEFAULT_FREQ);
       EEPROM.put(DEFAULT_PLL_N_ADD, DEFAULT_PLL_N);
       EEPROM.put(DEFAULT_PLL_NUM_ADD, DEFAULT_PLL_NUM);
       EEPROM.put(DEFAULT_PLL_DEN_ADD, DEFAULT_PLL_DEN);
+      EEPROM.put(DEFAULT_POWER_ADD, (U8)0);
+      EEPROM.put(FLASH_MODBUS_ADD, (U8)DEFAULT_MODBUS_ADD);
+      SYNTHE_save_config();
 
       SYNTHE_hot_start();
+}
+
+/* CRC-16/Modbus over the persistent payload at EEPROM addresses 2..19. */
+U16 SYNTHE_config_crc(void)
+{
+      U16 crc = 0xFFFF;
+      for (U8 address = DEFAULT_FREQ_ADD; address <= FLASH_MODBUS_ADD; ++address) {
+            crc ^= EEPROM.read(address);
+            for (U8 bit = 0; bit < 8; ++bit)
+                  crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : crc >> 1;
+      }
+      return crc;
+}
+
+void SYNTHE_save_config(void)
+{
+      const U16 magic = EEPROM_CONFIG_MAGIC;
+      EEPROM.put(EEPROM_MAGIC_ADD, magic);
+      const U16 crc = SYNTHE_config_crc();
+      EEPROM.put(EEPROM_CRC_ADD, crc);
+}
+
+boolean SYNTHE_config_valid(void)
+{
+      U16 magic = 0;
+      U16 stored_crc = 0;
+      U32 frequency = 0;
+      U32 n = 0;
+      U32 denominator = 0;
+      U8 slave = 0;
+      EEPROM.get(EEPROM_MAGIC_ADD, magic);
+      EEPROM.get(EEPROM_CRC_ADD, stored_crc);
+      EEPROM.get(DEFAULT_FREQ_ADD, frequency);
+      EEPROM.get(DEFAULT_PLL_N_ADD, n);
+      EEPROM.get(DEFAULT_PLL_DEN_ADD, denominator);
+      EEPROM.get(FLASH_MODBUS_ADD, slave);
+      return magic == EEPROM_CONFIG_MAGIC &&
+             stored_crc == SYNTHE_config_crc() &&
+             frequency >= MIN_OL_FREQ_KHZ && frequency <= MAX_OL_FREQ_KHZ &&
+             n > 0 && denominator > 0 &&
+             slave >= 1 && slave <= 247;
 }
 
 /*--------------------------------------------------------------------------------
@@ -1085,10 +1159,14 @@ void SYNTHE_modbus_init(void)
       mb.config(&Serial, 38400, SERIAL_8N1, MODBUS_TX_ENABLE);
       // Set the Slave ID (1-247)
       mb.setSlaveId(U8_modbus_slave_add);
-      // Init modbus registers
-      mb.addHreg(MODBUS_ADD_REG_R_RELEASE, RELEASE_LEVEL);
-      mb.addHreg(MODBUS_ADD_REG_W_FREQ_L, 0x00);
-      mb.addHreg(MODBUS_ADD_REG_W_FREQ_H, 0x00);
+      // OL frequency in kHz, high word first, matching the TRVT Python HMI.
+      mb.addHreg(MODBUS_HREG_OL_FREQ_H, (U16)(pll_freq >> 16));
+      mb.addHreg(MODBUS_HREG_OL_FREQ_L, (U16)(pll_freq & 0xFFFF));
+      mb.addIreg(MODBUS_IREG_OL_FREQ_H, (U16)(pll_freq >> 16));
+      mb.addIreg(MODBUS_IREG_OL_FREQ_L, (U16)(pll_freq & 0xFFFF));
+      mb.addIreg(MODBUS_IREG_FW_VERSION, RELEASE_LEVEL);
+      mb.addIreg(MODBUS_IREG_LOCKED, digitalRead(LOCK_DETECT) == HIGH);
+      mb.addIsts(MODBUS_ISTS_LOCKED, digitalRead(LOCK_DETECT) == HIGH);
 
 
 }
@@ -1103,35 +1181,23 @@ Return         :
 
 void SYNTHE_modbus_publish(void)
 {
-      char string[10];
-      DOUBLEVAL reg;  
-      
       mb.task();
 
-      // Incoming Input Register read only when Updated from Shack
-      if (mb.Hreg(MODBUS_ADD_REG_RW_UPDATE1) == 1) // Master update for dynamic command ?
-      {
-            reg.u16[0] = mb.Hreg(MODBUS_ADD_REG_W_FREQ_L);
-            reg.u16[1] = mb.Hreg(MODBUS_ADD_REG_W_FREQ_H);
+      const U32 requested_frequency =
+            ((U32)mb.Hreg(MODBUS_HREG_OL_FREQ_H) << 16) |
+            (U32)mb.Hreg(MODBUS_HREG_OL_FREQ_L);
 
-
-             if(U8_Verbose == DEBUG_MODBUS || U8_Verbose == DEBUG_ALL)
-            {
-                  digitalWrite(LED_LIVE, HIGH);              
-
-                  Serial.print(F("MODBUS freq="));
-                  sprintf(string,"0x%04X",reg.u16[1]);
-                  Serial.print(string);
-
-                  sprintf(string," 0x%04X",reg.u16[0]);
-                  Serial.println(string); 
-                  digitalWrite(LED_LIVE, LOW); 
-            }
-      
-            
-            mb.Hreg(MODBUS_ADD_REG_RW_UPDATE1, 0); // All command Read then clear the flag
+      if (requested_frequency != pll_freq) {
+            if (requested_frequency >= MIN_OL_FREQ_KHZ && requested_frequency <= MAX_OL_FREQ_KHZ)
+                  SYNTHE_set_PLL(SET_FREQ, requested_frequency);
+            // Always reflect the accepted value. Invalid commands are rejected atomically.
+            mb.Hreg(MODBUS_HREG_OL_FREQ_H, (U16)(pll_freq >> 16));
+            mb.Hreg(MODBUS_HREG_OL_FREQ_L, (U16)(pll_freq & 0xFFFF));
       }
-      // Outgoing Output Register toward Master Published at each call
-      //mb.Hreg(MODBUS_ADD_REG_R_MOTION_STATE, Motion.state); // Push Move status, ADD=101
 
-} 
+      mb.Ireg(MODBUS_IREG_OL_FREQ_H, (U16)(pll_freq >> 16));
+      mb.Ireg(MODBUS_IREG_OL_FREQ_L, (U16)(pll_freq & 0xFFFF));
+      mb.Ireg(MODBUS_IREG_FW_VERSION, RELEASE_LEVEL);
+      mb.Ireg(MODBUS_IREG_LOCKED, digitalRead(LOCK_DETECT) == HIGH);
+      mb.Ists(MODBUS_ISTS_LOCKED, digitalRead(LOCK_DETECT) == HIGH);
+}
